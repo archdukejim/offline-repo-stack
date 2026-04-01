@@ -1,0 +1,7 @@
+# Never commit real certificates
+*.pem
+*.crt
+*.key
+
+# Ansible retry files
+*.retry

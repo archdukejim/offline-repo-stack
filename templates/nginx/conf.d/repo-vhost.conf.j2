@@ -1,0 +1,25 @@
+{{ ansible_managed | comment }}
+server {
+    listen 443 ssl;
+    server_name {{ item.hostname }}.{{ domain_suffix }};
+    include /etc/nginx/ssl-params.conf;
+
+{% if item.extra_nginx is defined %}
+    {{ item.extra_nginx | indent(4) }}
+{% endif %}
+
+    location / {
+{% if item.nexus_path %}
+        proxy_pass http://nexus:{{ item.nexus_port }}{{ item.nexus_path }};
+{% else %}
+        proxy_pass http://nexus:{{ item.nexus_port }};
+{% endif %}
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+{% if item.extra_headers is defined %}
+        {{ item.extra_headers | indent(8) }}
+{% endif %}
+    }
+}

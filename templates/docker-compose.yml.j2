@@ -1,0 +1,70 @@
+{{ ansible_managed | comment }}
+version: "3.8"
+
+services:
+  nexus:
+    image: {{ images.nexus }}
+    container_name: nexus
+    restart: unless-stopped
+    volumes:
+      - {{ paths.mnt_nexus }}:/nexus-data
+    environment:
+      - INSTALL4J_ADD_VM_PARAMS={{ nexus.jvm_params }}
+    networks:
+      - repo-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:{{ nexus.http_port }}/service/rest/v1/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+
+  nexus-provision:
+    image: {{ images.provision }}
+    container_name: nexus-provision
+    depends_on:
+      nexus:
+        condition: service_healthy
+    volumes:
+      - {{ paths.install_base }}/nexus/provision.py:/provision.py:ro
+      - {{ paths.install_base }}/nexus/repos:/repos:ro
+    entrypoint: ["python3", "/provision.py"]
+    environment:
+      - NEXUS_URL=http://nexus:{{ nexus.http_port }}
+      - NEXUS_ADMIN_PASSWORD={{ nexus.admin_password }}
+    networks:
+      - repo-net
+    restart: "no"
+
+  nginx:
+    image: {{ images.nginx }}
+    container_name: nginx-proxy
+    restart: unless-stopped
+    depends_on:
+      nexus:
+        condition: service_healthy
+    ports:
+      - "{{ ports.https }}:443"
+      - "{{ ports.http }}:80"
+    volumes:
+      - {{ paths.install_base }}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - {{ paths.install_base }}/nginx/conf.d:/etc/nginx/conf.d:ro
+      - {{ paths.install_base }}/nginx/ssl-params.conf:/etc/nginx/ssl-params.conf:ro
+      - {{ paths.mnt_nginx }}/certs:/etc/nginx/certs:ro
+    networks:
+      - repo-net
+
+  tftp:
+    image: {{ images.tftp }}
+    container_name: tftp-server
+    restart: unless-stopped
+    ports:
+      - "{{ ports.tftp }}:69/udp"
+    volumes:
+      - {{ paths.mnt_tftp }}:/var/tftpboot:ro
+    networks:
+      - repo-net
+
+networks:
+  repo-net:
+    driver: bridge

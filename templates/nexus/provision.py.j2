@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+{{ ansible_managed | comment }}
+"""Nexus repository provisioner. Runs once after Nexus boots."""
+
+import json
+import os
+import sys
+import time
+import urllib.request
+import urllib.error
+import base64
+import glob
+
+NEXUS_URL = os.environ.get("NEXUS_URL", "http://nexus:{{ nexus.http_port }}")
+ADMIN_PASS = os.environ.get("NEXUS_ADMIN_PASSWORD", "{{ nexus.admin_password }}")
+REPOS_DIR = "/repos"
+
+
+def nexus_request(path, method="GET", data=None):
+    """Make authenticated request to Nexus API."""
+    creds = base64.b64encode(f"admin:{ADMIN_PASS}".encode()).decode()
+    url = f"{NEXUS_URL}{path}"
+    headers = {
+        "Authorization": f"Basic {creds}",
+        "Content-Type": "application/json",
+    }
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        resp = urllib.request.urlopen(req)
+        return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def wait_for_nexus():
+    print("==> Waiting for Nexus to be ready...")
+    while True:
+        try:
+            req = urllib.request.Request(f"{NEXUS_URL}/service/rest/v1/status")
+            resp = urllib.request.urlopen(req)
+            if resp.status == 200:
+                print("==> Nexus is up.")
+                return
+        except Exception:
+            pass
+        print("    Not ready, retrying in 5s...")
+        time.sleep(5)
+
+
+def provision_repositories():
+    repo_files = sorted(glob.glob(os.path.join(REPOS_DIR, "*.json")))
+    print(f"==> Found {len(repo_files)} repository definitions.")
+
+    for path in repo_files:
+        with open(path) as f:
+            defn = json.load(f)
+
+        name = defn["name"]
+        api_endpoint = defn["api_endpoint"]
+        body = defn["body"]
+
+        # Check if repo already exists
+        status, _ = nexus_request(f"/service/rest/v1/repositories/{name}")
+        if status == 200:
+            print(f"    '{name}' already exists. Skipping.")
+            continue
+
+        print(f"    Creating '{name}' via {api_endpoint}...")
+        status, resp = nexus_request(api_endpoint, method="POST", data=body)
+        if status in (201, 204):
+            print(f"    Created '{name}' successfully.")
+        else:
+            print(f"    WARN: '{name}' returned HTTP {status}: {resp[:200]}")
+
+
+if __name__ == "__main__":
+    wait_for_nexus()
+    provision_repositories()
+    print("==> Provisioning complete.")

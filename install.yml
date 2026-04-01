@@ -1,0 +1,112 @@
+---
+- name: Install offline-repo-stack
+  hosts: all
+  become: true
+  vars_files:
+    - vars.yaml
+
+  vars:
+    install_base: "{{ paths.install_base }}"
+    nginx_dir: "{{ install_base }}/nginx"
+    nexus_dir: "{{ install_base }}/nexus"
+
+  tasks:
+    # ── Directory structure ──────────────────────────────────────────
+    - name: Create install directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ install_base }}"
+        - "{{ nginx_dir }}"
+        - "{{ nginx_dir }}/conf.d"
+        - "{{ nexus_dir }}"
+        - "{{ nexus_dir }}/repos"
+
+    - name: Ensure VHD mount points exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ paths.mnt_nexus }}"
+        - "{{ paths.mnt_nginx }}"
+        - "{{ paths.mnt_tftp }}"
+
+    - name: Create nginx certs subdirectory on VHD
+      ansible.builtin.file:
+        path: "{{ paths.mnt_nginx }}/certs"
+        state: directory
+        mode: "0750"
+
+    # ── Docker Compose ───────────────────────────────────────────────
+    - name: Render docker-compose.yml
+      ansible.builtin.template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ install_base }}/docker-compose.yml"
+        mode: "0644"
+
+    # ── Nginx configs ────────────────────────────────────────────────
+    - name: Render nginx.conf
+      ansible.builtin.template:
+        src: templates/nginx/nginx.conf.j2
+        dest: "{{ nginx_dir }}/nginx.conf"
+        mode: "0644"
+
+    - name: Render ssl-params.conf
+      ansible.builtin.template:
+        src: templates/nginx/ssl-params.conf.j2
+        dest: "{{ nginx_dir }}/ssl-params.conf"
+        mode: "0644"
+
+    - name: Render default vhost
+      ansible.builtin.template:
+        src: templates/nginx/conf.d/default.conf.j2
+        dest: "{{ nginx_dir }}/conf.d/default.conf"
+        mode: "0644"
+
+    - name: Render repository vhosts
+      ansible.builtin.template:
+        src: templates/nginx/conf.d/repo-vhost.conf.j2
+        dest: "{{ nginx_dir }}/conf.d/{{ item.hostname }}.conf"
+        mode: "0644"
+      loop: "{{ repositories }}"
+      loop_control:
+        label: "{{ item.hostname }}.{{ domain_suffix }}"
+
+    # ── Nexus provisioner ────────────────────────────────────────────
+    - name: Render nexus provisioner script
+      ansible.builtin.template:
+        src: templates/nexus/provision.py.j2
+        dest: "{{ nexus_dir }}/provision.py"
+        mode: "0755"
+
+    - name: Render nexus repository definitions
+      ansible.builtin.template:
+        src: templates/nexus/repo.json.j2
+        dest: "{{ nexus_dir }}/repos/{{ item.name }}.json"
+        mode: "0644"
+      loop: "{{ repositories }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── Verification ─────────────────────────────────────────────────
+    - name: Show installed file tree
+      ansible.builtin.command:
+        cmd: find {{ install_base }} -type f
+      register: file_tree
+      changed_when: false
+
+    - name: Display installed files
+      ansible.builtin.debug:
+        var: file_tree.stdout_lines
+
+    - name: Remind about certificates
+      ansible.builtin.debug:
+        msg: >-
+          Installation complete. Before starting the stack:
+          1) Mount VHDs to {{ paths.mnt_nexus }}, {{ paths.mnt_nginx }}, {{ paths.mnt_tftp }}
+          2) Place TLS cert at {{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}
+          3) Place TLS key at {{ paths.mnt_nginx }}/certs/{{ tls.key_file }}
+          4) cd {{ install_base }} && docker compose up -d

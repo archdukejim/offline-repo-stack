@@ -1,0 +1,23 @@
+{{ ansible_managed | comment }}
+# HTTP -> HTTPS redirect for all hosts
+server {
+    listen 80 default_server;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+
+# Default HTTPS catch-all (returns 404 for unknown hostnames)
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    include /etc/nginx/ssl-params.conf;
+
+    location /health {
+        return 200 'ok';
+        add_header Content-Type text/plain;
+    }
+
+    location / {
+        return 404 'Unknown repository hostname';
+    }
+}

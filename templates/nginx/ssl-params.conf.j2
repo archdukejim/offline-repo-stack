@@ -1,0 +1,9 @@
+{{ ansible_managed | comment }}
+ssl_certificate     /etc/nginx/certs/{{ tls.cert_file }};
+ssl_certificate_key /etc/nginx/certs/{{ tls.key_file }};
+
+ssl_protocols {{ tls.protocols }};
+ssl_ciphers {{ tls.ciphers }};
+ssl_prefer_server_ciphers on;
+ssl_session_cache shared:SSL:10m;
+ssl_session_timeout 10m;

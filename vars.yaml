@@ -1,0 +1,126 @@
+---
+# -- Domain --
+domain_suffix: neutron.internal
+
+# -- Container Images --
+images:
+  nexus: sonatype/nexus3:3.68.1
+  nginx: nginx:1.25-alpine
+  provision: python:3.12-alpine
+  tftp: pghalliday/tftp:latest
+
+# -- Nexus Settings --
+nexus:
+  admin_password: admin123
+  http_port: 8081
+  docker_port: 8082
+  jvm_params: "-Xms1024m -Xmx2048m -XX:MaxDirectMemorySize=2048m"
+
+# -- Exposed Host Ports --
+ports:
+  https: 443
+  http: 80
+  tftp: 69
+
+# -- Filesystem Paths --
+paths:
+  # Where config files and docker-compose are installed
+  install_base: /opt/offline-repo-stack
+  # Virtual hard disk mount points (one VHD per service)
+  mnt_nexus: /mnt/nexus
+  mnt_nginx: /mnt/nginx
+  mnt_tftp: /mnt/tftp
+
+# -- TLS --
+tls:
+  cert_file: server.crt
+  key_file: server.key
+  protocols: "TLSv1.2 TLSv1.3"
+  ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+
+# -- Repositories --
+# Each entry generates: a Nexus repo JSON, an Nginx vhost, and a DNS name.
+# The hostname becomes <hostname>.<domain_suffix>.
+repositories:
+  - name: apt-ubuntu
+    hostname: ubuntu
+    format: apt
+    nexus_port: 8081
+    nexus_path: "/repository/apt-ubuntu/"
+    api_endpoint: "/service/rest/v1/repositories/apt/hosted"
+    body:
+      name: apt-ubuntu
+      online: true
+      storage:
+        blobStoreName: default
+        strictContentTypeValidation: true
+        writePolicy: ALLOW
+      apt:
+        distribution: jammy
+      aptSigning:
+        keypair: ""
+
+  - name: docker-hosted
+    hostname: docker
+    format: docker
+    nexus_port: 8082
+    nexus_path: ""
+    api_endpoint: "/service/rest/v1/repositories/docker/hosted"
+    extra_nginx: |
+      # Docker client expects large layer pushes
+          client_max_body_size 10G;
+    extra_headers: |
+      proxy_set_header Docker-Distribution-Api-Version registry/2.0;
+    body:
+      name: docker-hosted
+      online: true
+      storage:
+        blobStoreName: default
+        strictContentTypeValidation: true
+        writePolicy: ALLOW
+      docker:
+        v1Enabled: false
+        forceBasicAuth: true
+        httpPort: 8082
+
+  - name: pypi-hosted
+    hostname: pypi
+    format: pypi
+    nexus_port: 8081
+    nexus_path: "/repository/pypi-hosted/"
+    api_endpoint: "/service/rest/v1/repositories/pypi/hosted"
+    body:
+      name: pypi-hosted
+      online: true
+      storage:
+        blobStoreName: default
+        strictContentTypeValidation: true
+        writePolicy: ALLOW
+
+  - name: npm-hosted
+    hostname: npm
+    format: npm
+    nexus_port: 8081
+    nexus_path: "/repository/npm-hosted/"
+    api_endpoint: "/service/rest/v1/repositories/npm/hosted"
+    body:
+      name: npm-hosted
+      online: true
+      storage:
+        blobStoreName: default
+        strictContentTypeValidation: true
+        writePolicy: ALLOW
+
+  - name: raw-hosted
+    hostname: raw
+    format: raw
+    nexus_port: 8081
+    nexus_path: "/repository/raw-hosted/"
+    api_endpoint: "/service/rest/v1/repositories/raw/hosted"
+    body:
+      name: raw-hosted
+      online: true
+      storage:
+        blobStoreName: default
+        strictContentTypeValidation: true
+        writePolicy: ALLOW
