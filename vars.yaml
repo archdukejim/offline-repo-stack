@@ -33,8 +33,14 @@ paths:
 
 # -- TLS --
 tls:
+  # Set to true to generate a self-signed wildcard cert during install.
+  # Set to false for production -- place externally-minted certs on the
+  # nginx VHD at <mnt_nginx>/certs/ before starting the stack.
+  self_signed: true
   cert_file: server.crt
   key_file: server.key
+  # Days until the self-signed cert expires (ignored when self_signed is false)
+  self_signed_days: 365
   protocols: "TLSv1.2 TLSv1.3"
   ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
 

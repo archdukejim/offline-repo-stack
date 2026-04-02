@@ -40,6 +40,45 @@
         state: directory
         mode: "0750"
 
+    # ── Self-signed TLS certificate (optional) ──────────────────────
+    - name: Check if TLS cert already exists
+      ansible.builtin.stat:
+        path: "{{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}"
+      register: tls_cert_stat
+
+    - name: Generate self-signed wildcard certificate
+      when: tls.self_signed | default(false) and not tls_cert_stat.stat.exists
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -nodes -newkey rsa:4096
+          -days {{ tls.self_signed_days | default(365) }}
+          -keyout {{ paths.mnt_nginx }}/certs/{{ tls.key_file }}
+          -out {{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}
+          -subj "/CN=*.{{ domain_suffix }}"
+          -addext "subjectAltName=DNS:*.{{ domain_suffix }},DNS:{{ domain_suffix }}"
+      register: cert_generated
+
+    - name: Set certificate file permissions
+      when: tls.self_signed | default(false) and not tls_cert_stat.stat.exists
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}"
+          mode: "0644"
+        - path: "{{ paths.mnt_nginx }}/certs/{{ tls.key_file }}"
+          mode: "0600"
+
+    - name: Self-signed cert status
+      ansible.builtin.debug:
+        msg: >-
+          {% if tls.self_signed | default(false) %}
+          {% if tls_cert_stat.stat.exists %}Self-signed cert already exists, skipping generation.
+          {% else %}Generated self-signed wildcard cert for *.{{ domain_suffix }} ({{ tls.self_signed_days | default(365) }} days).
+          {% endif %}
+          {% else %}Self-signed disabled -- expecting external certs at {{ paths.mnt_nginx }}/certs/.
+          {% endif %}
+
     # ── Docker Compose ───────────────────────────────────────────────
     - name: Render docker-compose.yml
       ansible.builtin.template:
@@ -102,11 +141,16 @@
       ansible.builtin.debug:
         var: file_tree.stdout_lines
 
-    - name: Remind about certificates
+    - name: Post-install instructions
       ansible.builtin.debug:
         msg: >-
-          Installation complete. Before starting the stack:
-          1) Mount VHDs to {{ paths.mnt_nexus }}, {{ paths.mnt_nginx }}, {{ paths.mnt_tftp }}
+          Installation complete. Next steps:
+          1) Ensure VHDs are mounted at {{ paths.mnt_nexus }}, {{ paths.mnt_nginx }}, {{ paths.mnt_tftp }}
+          {% if not tls.self_signed | default(false) %}
           2) Place TLS cert at {{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}
           3) Place TLS key at {{ paths.mnt_nginx }}/certs/{{ tls.key_file }}
           4) cd {{ install_base }} && docker compose up -d
+          {% else %}
+          2) cd {{ install_base }} && docker compose up -d
+          (Self-signed cert already in place -- use curl -k or trust the CA on clients)
+          {% endif %}
