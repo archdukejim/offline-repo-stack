@@ -13,14 +13,111 @@
 
   tasks:
     # ================================================================
+    #  PREREQUISITES
+    # ================================================================
+    - name: Detect compose command
+      ansible.builtin.shell:
+        cmd: |
+          if docker compose version >/dev/null 2>&1; then
+            echo "docker compose"
+          elif command -v docker-compose >/dev/null 2>&1; then
+            echo "docker-compose"
+          else
+            echo ""
+          fi
+      register: compose_check
+      changed_when: false
+
+    - name: Set compose command fact
+      ansible.builtin.set_fact:
+        compose_cmd: "{{ compose_check.stdout | trim }}"
+
+    - name: Install prerequisite packages
+      when: not (uninstall | bool)
+      block:
+        - name: Gather package facts
+          ansible.builtin.package_facts:
+            manager: auto
+
+        - name: Install required packages (Debian/Ubuntu)
+          when: ansible_os_family == "Debian"
+          ansible.builtin.apt:
+            name:
+              - docker-compose-plugin
+              - openssl
+              - curl
+            state: present
+            update_cache: true
+
+        - name: Install required packages (RHEL/CentOS)
+          when: ansible_os_family == "RedHat"
+          ansible.builtin.yum:
+            name:
+              - docker-compose-plugin
+              - openssl
+              - curl
+            state: present
+
+        - name: Re-detect compose command after install
+          ansible.builtin.shell:
+            cmd: |
+              if docker compose version >/dev/null 2>&1; then
+                echo "docker compose"
+              elif command -v docker-compose >/dev/null 2>&1; then
+                echo "docker-compose"
+              else
+                echo ""
+              fi
+          register: compose_recheck
+          changed_when: false
+
+        - name: Update compose command fact
+          ansible.builtin.set_fact:
+            compose_cmd: "{{ compose_recheck.stdout | trim }}"
+
+        - name: Verify Docker compose is available
+          ansible.builtin.fail:
+            msg: >-
+              Neither 'docker compose' (plugin) nor 'docker-compose' (standalone) is available.
+              Install docker-compose-plugin or docker-compose before continuing.
+          when: compose_cmd == ""
+
+    # ================================================================
     #  UNINSTALL
     # ================================================================
-    - name: "UNINSTALL: Stop and remove containers"
-      when: uninstall | bool
-      ansible.builtin.command:
-        cmd: docker compose down --remove-orphans --volumes
+    - name: "UNINSTALL: Stop and remove containers (compose)"
+      when: uninstall | bool and compose_cmd != ""
+      ansible.builtin.shell:
+        cmd: "{{ compose_cmd }} down --remove-orphans --volumes"
         chdir: "{{ install_base }}"
       ignore_errors: true
+
+    - name: "UNINSTALL: Stop and remove containers (fallback)"
+      when: uninstall | bool and compose_cmd == ""
+      block:
+        - name: "UNINSTALL: List project containers"
+          ansible.builtin.shell:
+            cmd: docker ps -aq --filter "name=nexus" --filter "name=nginx-proxy" --filter "name=nexus-provision" --filter "name=tftp-server"
+          register: container_ids
+          changed_when: false
+          ignore_errors: true
+
+        - name: "UNINSTALL: Stop running containers"
+          ansible.builtin.shell:
+            cmd: "docker stop {{ container_ids.stdout_lines | join(' ') }}"
+          when: container_ids.stdout_lines | length > 0
+          ignore_errors: true
+
+        - name: "UNINSTALL: Remove containers"
+          ansible.builtin.shell:
+            cmd: "docker rm -f {{ container_ids.stdout_lines | join(' ') }}"
+          when: container_ids.stdout_lines | length > 0
+          ignore_errors: true
+
+        - name: "UNINSTALL: Remove project network"
+          ansible.builtin.shell:
+            cmd: docker network rm offline-repo-stack_repo-net
+          ignore_errors: true
 
     - name: "UNINSTALL: Remove installed config directory"
       when: uninstall | bool
@@ -28,11 +125,15 @@
         path: "{{ install_base }}"
         state: absent
 
-    - name: "UNINSTALL: Remove self-signed certificates"
-      when: uninstall | bool and tls.self_signed | default(false)
+    - name: "UNINSTALL: Remove data directories"
+      when: uninstall | bool
       ansible.builtin.file:
-        path: "{{ tls.cert_dir }}"
+        path: "{{ item }}"
         state: absent
+      loop:
+        - "{{ paths.mnt_nexus }}"
+        - "{{ paths.mnt_nginx }}"
+        - "{{ paths.mnt_tftp }}"
 
     - name: "UNINSTALL: Remove service accounts"
       when: uninstall | bool
@@ -58,12 +159,11 @@
       ansible.builtin.debug:
         msg: >-
           Uninstall complete. Removed:
-          - Containers (docker compose down)
+          - Containers and volumes
           - Config at {{ install_base }}
+          - Data directories: {{ paths.mnt_nexus }}, {{ paths.mnt_nginx }}, {{ paths.mnt_tftp }}
           - Service accounts: {{ service_accounts | dict2items | map(attribute='value.name') | join(', ') }}
           {% if tls.self_signed | default(false) %}- Self-signed certs at {{ tls.cert_dir }}{% endif %}
-          NOTE: VHD data at {{ paths.mnt_nexus }}, {{ paths.mnt_nginx }}, {{ paths.mnt_tftp }}
-          was NOT removed. Delete manually if desired.
 
     - name: "UNINSTALL: End play"
       when: uninstall | bool
@@ -119,6 +219,14 @@
         - "{{ paths.mnt_nexus }}"
         - "{{ paths.mnt_nginx }}"
         - "{{ paths.mnt_tftp }}"
+
+    - name: Create Nexus Java preferences directory
+      ansible.builtin.file:
+        path: "{{ paths.mnt_nexus }}/.java/.userPrefs"
+        state: directory
+        owner: "{{ service_accounts.nexus.uid }}"
+        group: "{{ service_accounts.nexus.gid }}"
+        mode: "0755"
 
     - name: Set VHD directory ownership to service accounts
       ansible.builtin.file:
@@ -257,5 +365,5 @@
           TLS certificates: {{ tls.cert_path }}
           {% if tls.self_signed | default(false) %}(self-signed, {{ tls.self_signed_days }} days){% else %}(external -- place before starting){% endif %}
 
-          Start: cd {{ install_base }} && docker compose up -d
+          Start: cd {{ install_base }} && {{ compose_cmd }} up -d
           Uninstall: ansible-playbook install.yml -e uninstall=true -i "localhost," -c local

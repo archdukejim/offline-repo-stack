@@ -69,6 +69,17 @@ get_install_base() {
     python3 -c "import yaml; print(yaml.safe_load(open('${VARS_FILE}'))['paths']['install_base'])"
 }
 
+get_compose_cmd() {
+    if sudo docker compose version >/dev/null 2>&1; then
+        echo "sudo docker compose"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        echo "sudo docker-compose"
+    else
+        echo "Error: Neither 'docker compose' nor 'docker-compose' is available." >&2
+        exit 1
+    fi
+}
+
 # -- Commands --
 
 cmd_install() {
@@ -80,39 +91,45 @@ cmd_uninstall() {
 }
 
 cmd_start() {
-    local base
+    local base compose
     base="$(get_install_base)"
-    sudo docker compose -f "${base}/docker-compose.yml" up -d
+    compose="$(get_compose_cmd)"
+    $compose -f "${base}/docker-compose.yml" up -d
 }
 
 cmd_stop() {
-    local base
+    local base compose
     base="$(get_install_base)"
-    sudo docker compose -f "${base}/docker-compose.yml" down
+    compose="$(get_compose_cmd)"
+    $compose -f "${base}/docker-compose.yml" down
 }
 
 cmd_restart() {
-    local base
+    local base compose
     base="$(get_install_base)"
-    sudo docker compose -f "${base}/docker-compose.yml" restart
+    compose="$(get_compose_cmd)"
+    $compose -f "${base}/docker-compose.yml" restart
 }
 
 cmd_status() {
-    local base
+    local base compose
     base="$(get_install_base)"
-    sudo docker compose -f "${base}/docker-compose.yml" ps
+    compose="$(get_compose_cmd)"
+    $compose -f "${base}/docker-compose.yml" ps
 }
 
 cmd_provision() {
-    local base
+    local base compose
     base="$(get_install_base)"
-    sudo docker compose -f "${base}/docker-compose.yml" up nexus-provision
+    compose="$(get_compose_cmd)"
+    $compose -f "${base}/docker-compose.yml" up nexus-provision
 }
 
 cmd_logs() {
-    local base
+    local base compose
     base="$(get_install_base)"
-    sudo docker compose -f "${base}/docker-compose.yml" logs -f "${EXTRA_ARGS[@]}"
+    compose="$(get_compose_cmd)"
+    $compose -f "${base}/docker-compose.yml" logs -f "${EXTRA_ARGS[@]}"
 }
 
 # -- Main --
