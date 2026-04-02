@@ -1,5 +1,5 @@
 ---
-- name: Install offline-repo-stack
+- name: Offline-repo-stack installer
   hosts: all
   become: true
   vars_files:
@@ -9,8 +9,94 @@
     install_base: "{{ paths.install_base }}"
     nginx_dir: "{{ install_base }}/nginx"
     nexus_dir: "{{ install_base }}/nexus"
+    uninstall: false
 
   tasks:
+    # ================================================================
+    #  UNINSTALL
+    # ================================================================
+    - name: "UNINSTALL: Stop and remove containers"
+      when: uninstall | bool
+      ansible.builtin.command:
+        cmd: docker compose down --remove-orphans --volumes
+        chdir: "{{ install_base }}"
+      ignore_errors: true
+
+    - name: "UNINSTALL: Remove installed config directory"
+      when: uninstall | bool
+      ansible.builtin.file:
+        path: "{{ install_base }}"
+        state: absent
+
+    - name: "UNINSTALL: Remove self-signed certificates"
+      when: uninstall | bool and tls.self_signed | default(false)
+      ansible.builtin.file:
+        path: "{{ tls.cert_dir }}"
+        state: absent
+
+    - name: "UNINSTALL: Remove service accounts"
+      when: uninstall | bool
+      ansible.builtin.user:
+        name: "{{ item.value.name }}"
+        state: absent
+        remove: true
+      loop: "{{ service_accounts | dict2items }}"
+      loop_control:
+        label: "{{ item.value.name }}"
+
+    - name: "UNINSTALL: Remove service groups"
+      when: uninstall | bool
+      ansible.builtin.group:
+        name: "{{ item.value.name }}"
+        state: absent
+      loop: "{{ service_accounts | dict2items }}"
+      loop_control:
+        label: "{{ item.value.name }}"
+
+    - name: "UNINSTALL: Summary"
+      when: uninstall | bool
+      ansible.builtin.debug:
+        msg: >-
+          Uninstall complete. Removed:
+          - Containers (docker compose down)
+          - Config at {{ install_base }}
+          - Service accounts: {{ service_accounts | dict2items | map(attribute='value.name') | join(', ') }}
+          {% if tls.self_signed | default(false) %}- Self-signed certs at {{ tls.cert_dir }}{% endif %}
+          NOTE: VHD data at {{ paths.mnt_nexus }}, {{ paths.mnt_nginx }}, {{ paths.mnt_tftp }}
+          was NOT removed. Delete manually if desired.
+
+    - name: "UNINSTALL: End play"
+      when: uninstall | bool
+      ansible.builtin.meta: end_play
+
+    # ================================================================
+    #  INSTALL
+    # ================================================================
+
+    # ── Service accounts ─────────────────────────────────────────────
+    - name: Create service groups
+      ansible.builtin.group:
+        name: "{{ item.value.name }}"
+        gid: "{{ item.value.gid }}"
+        system: true
+        state: present
+      loop: "{{ service_accounts | dict2items }}"
+      loop_control:
+        label: "{{ item.value.name }} (gid={{ item.value.gid }})"
+
+    - name: Create service accounts
+      ansible.builtin.user:
+        name: "{{ item.value.name }}"
+        uid: "{{ item.value.uid }}"
+        group: "{{ item.value.name }}"
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+        state: present
+      loop: "{{ service_accounts | dict2items }}"
+      loop_control:
+        label: "{{ item.value.name }} (uid={{ item.value.uid }})"
+
     # ── Directory structure ──────────────────────────────────────────
     - name: Create install directories
       ansible.builtin.file:
@@ -34,16 +120,32 @@
         - "{{ paths.mnt_nginx }}"
         - "{{ paths.mnt_tftp }}"
 
-    - name: Create nginx certs subdirectory on VHD
+    - name: Set VHD directory ownership to service accounts
       ansible.builtin.file:
-        path: "{{ paths.mnt_nginx }}/certs"
+        path: "{{ item.1 }}"
         state: directory
+        owner: "{{ item.0.value.uid }}"
+        group: "{{ item.0.value.gid }}"
+        mode: "0755"
+        recurse: true
+      loop: >-
+        {{ service_accounts | dict2items
+           | subelements('value.owns') }}
+      loop_control:
+        label: "{{ item.1 }} -> {{ item.0.value.name }}"
+
+    - name: Create TLS cert directory
+      ansible.builtin.file:
+        path: "{{ tls.cert_dir }}"
+        state: directory
+        owner: "{{ service_accounts.nginx.uid }}"
+        group: "{{ service_accounts.nginx.gid }}"
         mode: "0750"
 
     # ── Self-signed TLS certificate (optional) ──────────────────────
     - name: Check if TLS cert already exists
       ansible.builtin.stat:
-        path: "{{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}"
+        path: "{{ tls.cert_path }}"
       register: tls_cert_stat
 
     - name: Generate self-signed wildcard certificate
@@ -52,31 +154,32 @@
         cmd: >-
           openssl req -x509 -nodes -newkey rsa:4096
           -days {{ tls.self_signed_days | default(365) }}
-          -keyout {{ paths.mnt_nginx }}/certs/{{ tls.key_file }}
-          -out {{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}
+          -keyout {{ tls.key_path }}
+          -out {{ tls.cert_path }}
           -subj "/CN=*.{{ domain_suffix }}"
           -addext "subjectAltName=DNS:*.{{ domain_suffix }},DNS:{{ domain_suffix }}"
-      register: cert_generated
 
-    - name: Set certificate file permissions
+    - name: Set certificate file ownership and permissions
       when: tls.self_signed | default(false) and not tls_cert_stat.stat.exists
       ansible.builtin.file:
         path: "{{ item.path }}"
+        owner: "{{ service_accounts.nginx.uid }}"
+        group: "{{ service_accounts.nginx.gid }}"
         mode: "{{ item.mode }}"
       loop:
-        - path: "{{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}"
+        - path: "{{ tls.cert_path }}"
           mode: "0644"
-        - path: "{{ paths.mnt_nginx }}/certs/{{ tls.key_file }}"
+        - path: "{{ tls.key_path }}"
           mode: "0600"
 
     - name: Self-signed cert status
       ansible.builtin.debug:
         msg: >-
           {% if tls.self_signed | default(false) %}
-          {% if tls_cert_stat.stat.exists %}Self-signed cert already exists, skipping generation.
-          {% else %}Generated self-signed wildcard cert for *.{{ domain_suffix }} ({{ tls.self_signed_days | default(365) }} days).
+          {% if tls_cert_stat.stat.exists %}Self-signed cert already at {{ tls.cert_path }}, skipping.
+          {% else %}Generated self-signed wildcard cert: {{ tls.cert_path }} ({{ tls.self_signed_days }} days).
           {% endif %}
-          {% else %}Self-signed disabled -- expecting external certs at {{ paths.mnt_nginx }}/certs/.
+          {% else %}Self-signed disabled. Place external cert at {{ tls.cert_path }} and key at {{ tls.key_path }}.
           {% endif %}
 
     # ── Docker Compose ───────────────────────────────────────────────
@@ -144,13 +247,15 @@
     - name: Post-install instructions
       ansible.builtin.debug:
         msg: >-
-          Installation complete. Next steps:
-          1) Ensure VHDs are mounted at {{ paths.mnt_nexus }}, {{ paths.mnt_nginx }}, {{ paths.mnt_tftp }}
-          {% if not tls.self_signed | default(false) %}
-          2) Place TLS cert at {{ paths.mnt_nginx }}/certs/{{ tls.cert_file }}
-          3) Place TLS key at {{ paths.mnt_nginx }}/certs/{{ tls.key_file }}
-          4) cd {{ install_base }} && docker compose up -d
-          {% else %}
-          2) cd {{ install_base }} && docker compose up -d
-          (Self-signed cert already in place -- use curl -k or trust the CA on clients)
-          {% endif %}
+          Installation complete.
+
+          Service accounts created:
+          {% for svc in service_accounts | dict2items %}
+            {{ svc.value.name }} (uid={{ svc.value.uid }}, gid={{ svc.value.gid }})
+          {% endfor %}
+
+          TLS certificates: {{ tls.cert_path }}
+          {% if tls.self_signed | default(false) %}(self-signed, {{ tls.self_signed_days }} days){% else %}(external -- place before starting){% endif %}
+
+          Start: cd {{ install_base }} && docker compose up -d
+          Uninstall: ansible-playbook install.yml -e uninstall=true -i "localhost," -c local

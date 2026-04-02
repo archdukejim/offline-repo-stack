@@ -31,14 +31,42 @@ paths:
   mnt_nginx: /mnt/nginx
   mnt_tftp: /mnt/tftp
 
+# -- Service Accounts --
+# Each container runs as a dedicated system user. The installer creates
+# these accounts and sets ownership on their data directories.
+service_accounts:
+  nexus:
+    name: svc_nexus
+    uid: 2001
+    gid: 2001
+    # Directories this account owns
+    owns:
+      - "{{ paths.mnt_nexus }}"
+  nginx:
+    name: svc_nginx
+    uid: 2002
+    gid: 2002
+    owns:
+      - "{{ paths.mnt_nginx }}"
+  tftp:
+    name: svc_tftp
+    uid: 2003
+    gid: 2003
+    owns:
+      - "{{ paths.mnt_tftp }}"
+
 # -- TLS --
 tls:
   # Set to true to generate a self-signed wildcard cert during install.
-  # Set to false for production -- place externally-minted certs on the
-  # nginx VHD at <mnt_nginx>/certs/ before starting the stack.
+  # Set to false for production -- place externally-minted certs in cert_dir.
   self_signed: true
+  # Full host path where certs live (mounted into nginx container)
+  cert_dir: /mnt/nginx/certs
   cert_file: server.crt
   key_file: server.key
+  # Convenience: full paths derived from above
+  cert_path: /mnt/nginx/certs/server.crt
+  key_path: /mnt/nginx/certs/server.key
   # Days until the self-signed cert expires (ignored when self_signed is false)
   self_signed_days: 365
   protocols: "TLSv1.2 TLSv1.3"
