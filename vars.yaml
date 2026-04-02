@@ -37,21 +37,21 @@ paths:
 service_accounts:
   nexus:
     name: svc_nexus
-    uid: 2001
-    gid: 2001
+    uid: 444
+    gid: 444
     # Directories this account owns
     owns:
       - "{{ paths.mnt_nexus }}"
   nginx:
     name: svc_nginx
-    uid: 2002
-    gid: 2002
+    uid: 443
+    gid: 443
     owns:
       - "{{ paths.mnt_nginx }}"
   tftp:
     name: svc_tftp
-    uid: 2003
-    gid: 2003
+    uid: 469
+    gid: 469
     owns:
       - "{{ paths.mnt_tftp }}"
 
